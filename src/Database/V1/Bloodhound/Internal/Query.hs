@@ -7,6 +7,7 @@ module Database.V1.Bloodhound.Internal.Query where
 
 import           Bloodhound.Import
 
+import qualified Control.Monad.Fail                       as MF
 import qualified Data.HashMap.Strict                      as HM
 import qualified Data.Text                                as T
 
@@ -1468,7 +1469,7 @@ instance FromJSON ZeroTermsQuery where
           parse "all"  = pure ZeroTermsAll
           parse q      = fail ("Unexpected ZeroTermsQuery: " <> show q)
 
-fieldTagged :: Monad m => (FieldName -> Object -> m a) -> Object -> m a
+fieldTagged :: (MF.MonadFail m, Monad m) => (FieldName -> Object -> m a) -> Object -> m a
 fieldTagged f o = case HM.toList o of
                     [(k, Object o')] -> f (FieldName k) o'
                     _ -> fail "Expected object with 1 field-named key"

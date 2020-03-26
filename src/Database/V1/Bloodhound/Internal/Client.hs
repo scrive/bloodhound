@@ -10,6 +10,7 @@ module Database.V1.Bloodhound.Internal.Client where
 import           Bloodhound.Import
 
 import           Control.Applicative                           as A
+import           Control.Monad.Fail                            as MF
 import qualified Data.HashMap.Strict                           as HM
 import           Data.Text                                     (Text)
 import qualified Data.Text                                     as T
@@ -309,7 +310,7 @@ instance Read TimeInterval where
       f 'h' = return Hours
       f 'm' = return Minutes
       f 's' = return Seconds
-      f  _  = fail "TimeInterval expected one of w, d, h, m, s"
+      f  _  = MF.fail "TimeInterval expected one of w, d, h, m, s"
 
 -- | Typically a 7 character hex string.
 newtype BuildHash = BuildHash { buildHash :: Text }
@@ -356,7 +357,7 @@ instance FromJSON FSType where
   parseJSON = withText "FSType" parse
     where parse "simple"   = pure FSSimple
           parse "buffered" = pure FSBuffered
-          parse t          = fail ("Invalid FSType: " <> show t)
+          parse t          = MF.fail ("Invalid FSType: " <> show t)
 
 data CompoundFormat = CompoundFileFormat Bool
                     | MergeSegmentVsTotalIndex Double
@@ -370,12 +371,12 @@ attrFilterJSON fs = object [ n .= T.intercalate "," (toList vs)
 parseAttrFilter :: Value -> Parser (NonEmpty NodeAttrFilter)
 parseAttrFilter = withObject "NonEmpty NodeAttrFilter" parse
   where parse o = case HM.toList o of
-                    []   -> fail "Expected non-empty list of NodeAttrFilters"
+                    []   -> MF.fail "Expected non-empty list of NodeAttrFilters"
                     x:xs -> DT.mapM (uncurry parse') (x :| xs)
         parse' n = withText "Text" $ \t ->
           case T.splitOn "," t of
             fv:fvs -> return (NodeAttrFilter (NodeAttrName n) (fv :| fvs))
-            []     -> fail "Expected non-empty list of filter values"
+            []     -> MF.fail "Expected non-empty list of filter values"
 
 newtype NominalDiffTimeJSON = NominalDiffTimeJSON { ndtJSON ::  NominalDiffTime }
 
@@ -442,7 +443,7 @@ data Mapping = Mapping { typeName      :: TypeName
 
 {-| 'BulkOperation' is a sum type for expressing the four kinds of bulk
     operation index, create, delete, and update. 'BulkIndex' behaves like an
-    "upsert", 'BulkCreate' will fail if a document already exists at the DocId.
+    "upsert", 'BulkCreate' will MF.fail if a document already exists at the DocId.
 
    <http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/docs-bulk.html#docs-bulk>
 -}
@@ -517,7 +518,7 @@ newtype DocVersion = DocVersion {
 instance FromJSON DocVersion where
   parseJSON v = do
     i <- parseJSON v
-    maybe (fail "DocVersion out of range") return $ mkDocVersion i
+    maybe (MF.fail "DocVersion out of range") return $ mkDocVersion i
 
 -- | Smart constructor for in-range doc version
 mkDocVersion :: Int -> Maybe DocVersion
@@ -1218,7 +1219,7 @@ instance FromJSON SnapshotState where
       parse "ABORTED" = return SnapshotAborted
       parse "MISSING" = return SnapshotMissing
       parse "WAITING" = return SnapshotWaiting
-      parse t         = fail ("Invalid snapshot state " <> T.unpack t)
+      parse t         = MF.fail ("Invalid snapshot state " <> T.unpack t)
 
 data SnapshotRestoreSettings = SnapshotRestoreSettings {
       snapRestoreWaitForCompletion      :: Bool
@@ -1243,7 +1244,7 @@ data SnapshotRestoreSettings = SnapshotRestoreSettings {
     , snapRestoreRenameReplacement      :: Maybe (NonEmpty RestoreRenameToken)
     -- ^ Expression of how index renames should be constructed.
     , snapRestorePartial                :: Bool
-    -- ^ If some indices fail to restore, should the process proceed?
+    -- ^ If some indices MF.fail to restore, should the process proceed?
     , snapRestoreIncludeAliases         :: Bool
     -- ^ Should the restore also restore the aliases captured in the
     -- snapshot.
@@ -1370,7 +1371,7 @@ data SnapshotCreateSettings = SnapshotCreateSettings {
     -- will essentially be a no-op snapshot.
     , snapIgnoreUnavailable  :: Bool
     -- ^ If set to True, any matched indices that don't exist will be
-    -- ignored. Otherwise it will be an error and fail.
+    -- ignored. Otherwise it will be an error and MF.fail.
     , snapIncludeGlobalState :: Bool
     , snapPartial            :: Bool
     -- ^ If some indices failed to snapshot (e.g. if not all primary
@@ -1526,7 +1527,7 @@ instance FromJSON IndexSettingsSummary where
                       [(ixn, v@(Object o'))] -> IndexSettingsSummary (IndexName ixn)
                                                 <$> parseJSON v
                                                 <*> (fmap (filter (not . redundant)) . parseSettings =<< o' .: "settings")
-                      _ -> fail "Expected single-key object with index name"
+                      _ -> MF.fail "Expected single-key object with index name"
           redundant (NumberOfReplicas _) = True
           redundant _                    = False
 
@@ -1538,8 +1539,8 @@ instance FromJSON VersionNumber where
     where
       parse s = case filter (null . snd)(RP.readP_to_S Vers.parseVersion s) of
                   [(v, _)] -> pure (VersionNumber v)
-                  [] -> fail ("Invalid version string " ++ s)
-                  xs -> fail ("Ambiguous version string " ++ s ++ " (" ++ intercalate ", " (Vers.showVersion . fst <$> xs) ++ ")")
+                  [] -> MF.fail ("Invalid version string " ++ s)
+                  xs -> MF.fail ("Ambiguous version string " ++ s ++ " (" ++ intercalate ", " (Vers.showVersion . fst <$> xs) ++ ")")
 
 instance ToJSON Interval where
   toJSON Year = "year"
@@ -1552,13 +1553,13 @@ instance ToJSON Interval where
   toJSON Second = "second"
   toJSON (FractionalInterval fraction interval) = toJSON $ show fraction ++ show interval
 
-parseStringInterval :: (Monad m) => String -> m NominalDiffTime
+parseStringInterval :: (MonadFail m, Monad m) => String -> m NominalDiffTime
 parseStringInterval s = case span isNumber s of
-  ("", _) -> fail "Invalid interval"
+  ("", _) -> MF.fail "Invalid interval"
   (nS, unitS) -> case (readMay nS, readMay unitS) of
     (Just n, Just unit) -> return (fromInteger (n * unitNDT unit))
-    (Nothing, _)        -> fail "Invalid interval number"
-    (_, Nothing)        -> fail "Invalid interval unit"
+    (Nothing, _)        -> MF.fail "Invalid interval number"
+    (_, Nothing)        -> MF.fail "Invalid interval unit"
   where
     unitNDT Seconds = 1
     unitNDT Minutes = 60
@@ -1804,7 +1805,7 @@ instance FromJSON LoadAvgs where
         [one, five, fifteen] -> LoadAvgs <$> parseJSON one
                                          <*> parseJSON five
                                          <*> parseJSON fifteen
-        _                    -> fail "Expecting a triple of Doubles"
+        _                    -> MF.fail "Expecting a triple of Doubles"
 
 instance FromJSON NodeIndicesStats where
   parseJSON = withObject "NodeIndicesStats" parse
@@ -1933,7 +1934,7 @@ instance FromJSON NodeTransportInfo where
       parseProfiles (Object o)  | HM.null o = return []
       parseProfiles v@(Array _) = parseJSON v
       parseProfiles Null        = return []
-      parseProfiles _           = fail "Could not parse profiles"
+      parseProfiles _           = MF.fail "Could not parse profiles"
 
 instance FromJSON NodeNetworkInfo where
   parseJSON = withObject "NodeNetworkInfo" parse
@@ -2009,15 +2010,15 @@ instance FromJSON ReplicaBounds where
                           [a, "all"] -> ReplicasLowerBounded <$> parseReadText a
                           [a, b] -> ReplicasBounded <$> parseReadText a
                                                     <*> parseReadText b
-                          _ -> fail ("Could not parse ReplicaBounds: " <> show t)
+                          _ -> MF.fail ("Could not parse ReplicaBounds: " <> show t)
           parseBool False = pure ReplicasUnbounded
-          parseBool _ = fail "ReplicasUnbounded cannot be represented with True"
+          parseBool _ = MF.fail "ReplicasUnbounded cannot be represented with True"
 
 instance FromJSON NominalDiffTimeJSON where
   parseJSON = withText "NominalDiffTime" parse
     where parse t = case T.takeEnd 1 t of
                       "s" -> NominalDiffTimeJSON . fromInteger <$> parseReadText (T.dropEnd 1 t)
-                      _ -> fail "Invalid or missing NominalDiffTime unit (expected s)"
+                      _ -> MF.fail "Invalid or missing NominalDiffTime unit (expected s)"
 
 instance FromJSON AllocationPolicy where
   parseJSON = withText "AllocationPolicy" parse
@@ -2025,7 +2026,7 @@ instance FromJSON AllocationPolicy where
           parse "primaries" = pure AllocPrimaries
           parse "new_primaries" = pure AllocNewPrimaries
           parse "none" = pure AllocNone
-          parse t = fail ("Invlaid AllocationPolicy: " <> show t)
+          parse t = MF.fail ("Invlaid AllocationPolicy: " <> show t)
 
 instance ToJSON CompoundFormat where
   toJSON (CompoundFileFormat x)       = Bool x
@@ -2099,12 +2100,12 @@ instance FromJSON ThreadPoolSize where
       parseAsInt (-1) = return ThreadPoolUnbounded
       parseAsInt n
         | n >= 0 = return (ThreadPoolBounded n)
-        | otherwise = fail "Thread pool size must be >= -1."
+        | otherwise = MF.fail "Thread pool size must be >= -1."
       parseAsString = withText "ThreadPoolSize" $ \t ->
         case first (readMay . T.unpack) (T.span isNumber t) of
           (Just n, "k") -> return (ThreadPoolBounded (n * 1000))
           (Just n, "")  -> return (ThreadPoolBounded n)
-          _             -> fail ("Invalid thread pool size " <> T.unpack t)
+          _             -> MF.fail ("Invalid thread pool size " <> T.unpack t)
 
 instance FromJSON ThreadPoolType where
   parseJSON = withText "ThreadPoolType" parse
@@ -2112,7 +2113,7 @@ instance FromJSON ThreadPoolType where
       parse "scaling" = return ThreadPoolScaling
       parse "fixed"   = return ThreadPoolFixed
       parse "cached"  = return ThreadPoolCached
-      parse e         = fail ("Unexpected thread pool type" <> T.unpack e)
+      parse e         = MF.fail ("Unexpected thread pool type" <> T.unpack e)
 
 data Source =
     NoSource
@@ -2308,7 +2309,7 @@ instance FromJSON AliasRouting where
             sr <- o .:? "search_routing"
             ir <- o .:? "index_routing"
             if isNothing sr && isNothing ir
-               then fail "Both search_routing and index_routing can't be blank"
+               then MF.fail "Both search_routing and index_routing can't be blank"
                else return (GranularAliasRouting sr ir)
 
 instance FromJSON IndexAliasCreate where

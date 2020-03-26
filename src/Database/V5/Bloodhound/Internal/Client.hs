@@ -9,6 +9,7 @@ module Database.V5.Bloodhound.Internal.Client where
 
 import           Bloodhound.Import
 
+import qualified Control.Monad.Fail           as MF
 import qualified Data.Text           as T
 import qualified Data.Traversable    as DT
 import qualified Data.HashMap.Strict as HM
@@ -2331,7 +2332,7 @@ instance ToJSON Interval where
   toJSON Minute  = "minute"
   toJSON Second  = "second"
 
-parseStringInterval :: (Monad m) => String -> m NominalDiffTime
+parseStringInterval :: (MF.MonadFail m, Monad m) => String -> m NominalDiffTime
 parseStringInterval s = case span isNumber s of
   ("", _) -> fail "Invalid interval"
   (nS, unitS) -> case (readMay nS, readMay unitS) of
